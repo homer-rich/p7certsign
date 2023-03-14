@@ -33,24 +33,10 @@ fn main() -> Result<()> {
             HCRYPTPROV_LEGACY::default(),
             CERT_OPEN_STORE_FLAGS(0),
             ::core::mem::zeroed())?;
-
-/* 
-        let cert_subj = w!("DoD JITC Root CA 3").as_ptr() as *mut c_void;
-        let find_cert = CertFindCertificateInStore(
-            personal_store,
-            X509_ASN_ENCODING,
-            0,
-            CERT_FIND_SUBJECT_STR,
-            Some(cert_subj),
-            ::core::mem::zeroed()); */
+        
+        //println!("Error after Handle: {:?}", GetLastError());
 
         let mut fresh_cert: *mut CERT_CONTEXT = ::core::mem::zeroed();
-
-        //println!("We HSTRING??:  {:?}", strang);
-        //let file_interaction = CreateFileW(w!("c:\\users\\hrich\\desktop\\root_pkcs7_store.p7b"), FILE_GENERIC_WRITE, FILE_SHARE_WRITE, None, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, None).unwrap();
-        //println!("How's the HANDLE?: {:?}", file_interaction);
-        //println!("Error after Handle: {:?}", GetLastError());
-        
 
         let crypt_ui_instance = LoadLibraryW(w!("cryptdlg.dll"))?;
 
@@ -67,7 +53,6 @@ fn main() -> Result<()> {
             // szPurposeOid: s!("1.3.6.1.5.5.7.3.3"),
             // on our encryption certs
             szPurposeOid: s!("1.3.6.1.4.1.311.10.3.12"),
-            // szPurposeOid: s!(""),
             cCertContext: 0,
             arrayCertContext: &mut fresh_cert,
             lCustData: windows::Win32::Foundation::LPARAM(0),
@@ -78,11 +63,12 @@ fn main() -> Result<()> {
             hprov: 0,
         };
 
-        let call_cert_select: CertSelectCertificateW = transmute(GetProcAddress(crypt_ui_instance, s!("CertSelectCertificateW")));
-        call_cert_select(&cert_select_struct);
+        let cert_select_certificate_w: CertSelectCertificateW = transmute(
+            GetProcAddress(crypt_ui_instance, s!("CertSelectCertificateW")));
+        cert_select_certificate_w(&cert_select_struct);
         if fresh_cert.is_null() { std::process::exit(1); }
 
-        /* Displays celected cert */
+        // Displays selected cert
         UI::CryptUIDlgViewContext(
             CERT_STORE_CERTIFICATE_CONTEXT,
             fresh_cert as *mut c_void,
@@ -92,42 +78,38 @@ fn main() -> Result<()> {
             ::core::mem::zeroed(),
         );
 
-        //fresh_cert.
-        //let mut empty_crypt_attribute = CRYPT_ATTRIBUTES;
-        //static constant_cert: *const CERT_CONTEXT = constant_cert.clone_from(fresh_cert);
-
-        let mut extended_sign_info: UI::CRYPTUI_WIZ_DIGITAL_SIGN_EXTENDED_INFO = UI::CRYPTUI_WIZ_DIGITAL_SIGN_EXTENDED_INFO {
-            dwSize: std::mem::size_of::<UI::CRYPTUI_WIZ_DIGITAL_SIGN_EXTENDED_INFO>() as u32,
-            dwAttrFlags: UI::CRYPTUI_WIZ_DIGITAL_SIGN_INDIVIDUAL,
-            pwszDescription: w!("My Cert"),
-            pwszMoreInfoLocation: w!(""),
-            pszHashAlg: s!(""),
-            pwszSigningCertDisplayString: w!("Test"),
-            hAdditionalCertStore: ::core::mem::zeroed(),
-            psAuthenticated: ::core::mem::zeroed(),
-            psUnauthenticated: ::core::mem::zeroed(),
+        // Sign a file with the selected cert
+        // https://learn.microsoft.com/en-us/windows/win32/seccrypto/example-c-program-signing-a-message-and-verifying-a-message-signature
+        let crypt_sign_message_para = CRYPT_SIGN_MESSAGE_PARA {
+            cbSize: 0,
+            dwMsgEncodingType: X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+            pSigningCert: fresh_cert,
+            HashAlgorithm: 0,
+            pvHashAuxInfo: 0,
+            cMsgCert: 0,
+            rgpMsgCert: 0,
+            cMsgCrl: 0,
+            rgpMsgCrl: 0,
+            cAuthAttr: 0,
+            rgAuthAttr: 0,
+            cUnauthAttr: 0,
+            rgUnauthAttr: 0,
+            dwFlags: 0,
+            dwInnerContentType: 0,
         };
 
-        let sign_info: UI::CRYPTUI_WIZ_DIGITAL_SIGN_INFO = UI::CRYPTUI_WIZ_DIGITAL_SIGN_INFO {
-            dwSize: std::mem::size_of::<UI::CRYPTUI_WIZ_DIGITAL_SIGN_INFO>() as u32,
-            dwSubjectChoice: windows::Win32::Security::Cryptography::UI::CRYPTUI_WIZ_DIGITAL_SIGN_SUBJECT(0),
-            Anonymous1: UI::CRYPTUI_WIZ_DIGITAL_SIGN_INFO_0{ pwszFileName: w!("") },
-            dwSigningCertChoice: UI::CRYPTUI_WIZ_DIGITAL_SIGN_CERT,
-            Anonymous2: UI::CRYPTUI_WIZ_DIGITAL_SIGN_INFO_1 { pSigningCertContext: fresh_cert },
-            pwszTimestampURL: w!(""),
-            dwAdditionalCertChoice: UI::CRYPTUI_WIZ_DIGITAL_ADDITIONAL_CERT_CHOICE(0),
-            pSignExtInfo: &mut extended_sign_info as *mut UI::CRYPTUI_WIZ_DIGITAL_SIGN_EXTENDED_INFO,
-        };
+        let sign_success = CryptSignMessage();
+        /*
+        let mssign_instance = LoadLibraryW(w!("Mssign32.dll"))?;
+        let signer_time_stamp_ex2: CertSelectCertificateW = transmute(
+            GetProcAddress(mssign_instance, s!("SignerTimeStampEx2")));
+        let singer_sign_ex2: CertSelectCertificateW = transmute(
+            GetProcAddress(mssign_instance, s!("SignerSignEx2")));
 
-        let show_me_signature = UI::CryptUIWizDigitalSign(
-            0,
-            None,
-            w!("Title"),
-            &sign_info as *const UI::CRYPTUI_WIZ_DIGITAL_SIGN_INFO, 
-            ::core::mem::zeroed(), 
-        );
-        if show_me_signature.as_bool() { println!("True") } else { println!("False") }
-        
+        let h_result = signer_time_stamp_ex2();
+        let h_result_other = singer_sign_ex2();
+
+         */
         if !CertFreeCertificateContext(Some(fresh_cert)).as_bool() {
             println!("Couldn't close the cert context.");
         }
@@ -137,37 +119,6 @@ fn main() -> Result<()> {
         if !CertCloseStore(memory_store, 0).as_bool() {
             println!("Couldn't close the store.");
         }
-
-        //println!("Certificate info: {:?}", cert_subby);
-        //let success_select = CertSelectCertificateW(cert_select_struct);
-        // let hinstance = winapi::um::libloaderapi::GetModuleHandleW(std::ptr::null_mut());
-        // std::mem::size_of::<CERT_SELECT_STRUCT_W>() as u32
-        /*
-        let strang = w!("Signer_Box").abi().as_ptr() as *mut c_void;
-        let digital_sign = CryptUIWizDigitalSign(
-            0,
-            event,
-            strang,
-            
-        );
-        let strang = w!("c:\\users\\hrich\\desktop\\memory_store.p7b").as_ptr() as *mut c_void;
-        let save_to_store = CertAddCertificateContextToStore(
-            memory_store,
-            fresh_cert,
-            CERT_STORE_ADD_REPLACE_EXISTING,
-            None);
-        let success = CertSaveStore(
-            memory_store,
-            PKCS_7_ASN_ENCODING | X509_ASN_ENCODING,
-            CERT_STORE_SAVE_AS_PKCS7,
-            CERT_STORE_SAVE_TO_FILENAME_W,
-            strang,
-            0);
-        */
-        //MessageBoxW(None, w!("Wide"), w!("Caption"), windows::Win32::UI::WindowsAndMessaging::MB_OK);
-        //println!("We happy?:  {:?}", success);
-        //println!("We saved to memory?:  {:?}", save_to_store);
-
 
     }
 
