@@ -1,8 +1,10 @@
 #![allow(unused_imports)]
-use std::{ffi::c_void, mem::transmute, ptr};
+use std::{ffi::c_void, mem::transmute, ptr, ops::BitOr};
 use windows::{
     core::*, Win32::{Security::Cryptography::{*, UI::{CryptUIWizDigitalSign, CERT_SELECT_STRUCT_W, CSS_ENABLETEMPLATE}}, System::{Threading::{CreateEventW, WaitForSingleObject, SetEvent}, LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW}}, Foundation::{CloseHandle, WPARAM, LPARAM, HWND}, UI::WindowsAndMessaging::MessageBoxW},
 };
+
+// https://learn.microsoft.com/en-us/windows/win32/seccrypto/cryptography-functions
 
 type CertSelectCertificateW = extern "stdcall" fn(*const CERT_SELECT_STRUCT_W);
 
@@ -42,7 +44,7 @@ fn main() -> Result<()> {
 
         let cert_select_struct = CERT_SELECT_STRUCT_W {
             dwSize: std::mem::size_of::<CERT_SELECT_STRUCT_W>() as u32,
-            hwndParent: None.into(),
+            hwndParent: ::core::mem::zeroed(),
             hInstance: crypt_ui_instance,
             pTemplateName: w!(""),
             dwFlags: CSS_ENABLETEMPLATE,
@@ -69,36 +71,67 @@ fn main() -> Result<()> {
         if fresh_cert.is_null() { std::process::exit(1); }
 
         // Displays selected cert
-        UI::CryptUIDlgViewContext(
+        /* UI::CryptUIDlgViewContext(
             CERT_STORE_CERTIFICATE_CONTEXT,
             fresh_cert as *mut c_void,
             None,
             w!("Selected Certificate"),
             0,
             ::core::mem::zeroed(),
-        );
+        ); */
 
         // Sign a file with the selected cert
         // https://learn.microsoft.com/en-us/windows/win32/seccrypto/example-c-program-signing-a-message-and-verifying-a-message-signature
+        let oid = "1.2.840.113549.1.1.5\0".to_owned().as_mut_ptr();
         let crypt_sign_message_para = CRYPT_SIGN_MESSAGE_PARA {
-            cbSize: 0,
-            dwMsgEncodingType: X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+            cbSize: std::mem::size_of::<CRYPT_SIGN_MESSAGE_PARA>() as u32,
+            dwMsgEncodingType: PKCS_7_ASN_ENCODING.bitor(X509_ASN_ENCODING).0,
             pSigningCert: fresh_cert,
-            HashAlgorithm: 0,
-            pvHashAuxInfo: 0,
-            cMsgCert: 0,
-            rgpMsgCert: 0,
+            HashAlgorithm: CRYPT_ALGORITHM_IDENTIFIER { 
+                            pszObjId: windows::core::PSTR::from_raw(oid), 
+                            Parameters: CRYPT_INTEGER_BLOB::default() },
+            pvHashAuxInfo: ::core::mem::zeroed(),
+            cMsgCert: 1,
+            rgpMsgCert: &mut fresh_cert,
             cMsgCrl: 0,
-            rgpMsgCrl: 0,
+            rgpMsgCrl: ::core::mem::zeroed(),
             cAuthAttr: 0,
-            rgAuthAttr: 0,
+            rgAuthAttr: ::core::mem::zeroed(),
             cUnauthAttr: 0,
-            rgUnauthAttr: 0,
+            rgUnauthAttr: ::core::mem::zeroed(),
             dwFlags: 0,
             dwInnerContentType: 0,
         };
 
-        let sign_success = CryptSignMessage();
+        let secret_message = "eessageToBeSigned\0";
+        let sign_me:Vec<*const u8> = vec!(secret_message.as_ptr());
+        
+        let to_be_signed_sizes_array = vec!(50000 as u32);
+        let mut data_size: u32 = 50000;
+        let return_buffer = ::core::mem::zeroed();
+        // First call sets up variables to receive the size of the signed data.
+        let sign_success = CryptSignMessage(
+            &crypt_sign_message_para,
+            windows::Win32::Foundation::BOOL::from(false),
+            1,
+            Some(sign_me.as_ptr()),
+            to_be_signed_sizes_array.as_ptr(),
+            //::core::mem::zeroed(),
+            return_buffer,
+            &mut data_size,
+        );
+        println!("First call complete.");
+        /* let pb_signed_message_blob: *mut u8 = ::core::mem::zeroed();
+        let _sign_success_2 = CryptSignMessage(
+            &crypt_sign_message_para,
+            windows::Win32::Foundation::BOOL::from(false),
+            1,
+            Some(SIGN_ME.as_ptr()),
+            std::mem::size_of_val(&SIGN_ME) as *const u32,
+            Some(pb_signed_message_blob),
+            ::core::mem::zeroed(),
+        ); */
+        println!("Created _sign_success : {:?}", sign_success);
         /*
         let mssign_instance = LoadLibraryW(w!("Mssign32.dll"))?;
         let signer_time_stamp_ex2: CertSelectCertificateW = transmute(
