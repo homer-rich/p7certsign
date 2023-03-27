@@ -21,6 +21,8 @@ use windows::{
 
 type CertSelectCertificateW = extern "stdcall" fn(*const CERT_SELECT_STRUCT_W);
 
+static OID: &str = "1.2.840.113549.1.1.5\0";
+
 fn main() -> Result<()> {
     unsafe {
         // Copied from example, don't know what it does
@@ -109,15 +111,16 @@ fn main() -> Result<()> {
 
         // Sign a file with the selected cert
         // https://learn.microsoft.com/en-us/windows/win32/seccrypto/example-c-program-signing-a-message-and-verifying-a-message-signature
-        let oid = "1.2.840.113549.2.2\0".to_owned().as_mut_ptr();
-        let cst_oid = windows::core::PSTR::from_raw(oid);
+        //let oid = "1.2.840.113549.1.1.5\0".to_owned().as_mut_ptr();
+        
+        //let pointer_to_oid = std::ptr::addr_of_mut!(OID.as_mut_ptr());
         let crypt_sign_message_para = CRYPT_SIGN_MESSAGE_PARA {
             cbSize: u32::try_from(std::mem::size_of::<CRYPT_SIGN_MESSAGE_PARA>()).unwrap(),
             dwMsgEncodingType: X509_ASN_ENCODING.0,
             pSigningCert: fresh_cert,
             HashAlgorithm: CRYPT_ALGORITHM_IDENTIFIER { 
-                pszObjId: cst_oid, 
-                Parameters: CRYPT_INTEGER_BLOB::default()},
+                            pszObjId: windows::core::PSTR::from_raw(OID.to_owned().as_mut_ptr()), 
+                            Parameters: CRYPT_INTEGER_BLOB::default() },
             pvHashAuxInfo: ::core::mem::zeroed(),
             cMsgCert: 1,
             rgpMsgCert: &mut fresh_cert,
