@@ -19,7 +19,6 @@ features = [
     "Win32_System_LibraryLoader",
 ]
 
-
 [profile.release]
 opt-level = 'z'     # Optimize for size
 lto = true          # Enable link-time optimization
