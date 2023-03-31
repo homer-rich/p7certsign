@@ -32,6 +32,17 @@ let show_me_signature = UI::CryptUIWizDigitalSign(
 if show_me_signature.as_bool() { println!("Sign Good") } else { println!("Sign Bad") }
 */
 
+
+    // Displays selected cert
+    /* UI::CryptUIDlgViewContext(
+        CERT_STORE_CERTIFICATE_CONTEXT,
+        fresh_cert as *mut c_void,
+        None,
+        w!("Selected Certificate"),
+        0,
+        ::core::mem::zeroed(),
+    ); */
+
         let memory_store = CertOpenStore(
             CERT_STORE_PROV_MEMORY,
             CERT_QUERY_ENCODING_TYPE::default(),
