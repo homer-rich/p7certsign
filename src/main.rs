@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use std::{ffi::{c_void}, mem::transmute};
+use std::{ffi::{c_void}, mem::transmute, fs::File, io::Write};
 use windows::{
     core::*, Win32::{
         Security::Cryptography::{
@@ -7,7 +7,7 @@ use windows::{
         CERT_STORE_PROV_SYSTEM_W, CERT_QUERY_ENCODING_TYPE, HCRYPTPROV_LEGACY, CERT_SYSTEM_STORE_CURRENT_USER_ID, 
         CertOpenStore, CERT_SYSTEM_STORE_LOCATION_SHIFT, CERT_OPEN_STORE_FLAGS, CERT_CONTEXT, 
         CRYPT_SIGN_MESSAGE_PARA, PKCS_7_ASN_ENCODING, CryptSignMessage, CertFreeCertificateContext, 
-        CertCloseStore, CRYPT_ALGORITHM_IDENTIFIER, CRYPT_INTEGER_BLOB, CERT_CHAIN_PARA, CERT_CHAIN_CONTEXT
+        CertCloseStore, CRYPT_ALGORITHM_IDENTIFIER, CRYPT_INTEGER_BLOB, CERT_CHAIN_PARA, CERT_CHAIN_CONTEXT, CertFreeCertificateChain
         }, System::{
             LibraryLoader::{GetProcAddress, LoadLibraryW, FreeLibrary}, 
             Memory::{HeapAlloc, GetProcessHeap, HEAP_ZERO_MEMORY}
@@ -63,9 +63,39 @@ unsafe {
         cert_select_certificate_w(&cert_select_struct);
         if fresh_cert.is_null() { std::process::exit(1); }
 
+        // Grab certificate chain
+        let cert_chain_parameter = CERT_CHAIN_PARA {
+            cbSize: u32::try_from(std::mem::size_of::<CERT_CHAIN_PARA>()).unwrap(),
+            RequestedUsage: windows::Win32::Security::Cryptography::CERT_USAGE_MATCH::default(),
+        };
+
+        let mut fresh_chain: *mut CERT_CHAIN_CONTEXT = ::core::mem::zeroed();
+        let _cert_chain = windows::Win32::Security::Cryptography::CertGetCertificateChain (
+            None,
+            fresh_cert,
+            ::core::mem::zeroed(),
+            None,
+            &cert_chain_parameter,
+            0,
+            ::core::mem::zeroed(),
+            &mut fresh_chain,
+        );
+        let test1 = *(*(*(*fresh_chain).rgpChain)).rgpElement;
+        let test2 = std::slice::from_raw_parts(test1, 2 as _);
+        // get second cert in data array spot 0 is the default cert, slot 1 is next up in the chain
+        let _test3 = std::slice::from_raw_parts(
+            (*(test2[1].pCertContext)).pbCertEncoded, 
+            (*(test2[1].pCertContext)).cbCertEncoded as _);
+
+        let test4 = test2[1].pCertContext.cast_mut();
+        // get chain size
+        dbg!((**(*fresh_chain).rgpChain).cElement);
+
+        let mut certs_in_signature:Vec<*mut CERT_CONTEXT> = vec!(test4, fresh_cert);
+
         // Sign a file with the selected cert
         // https://learn.microsoft.com/en-us/windows/win32/seccrypto/example-c-program-signing-a-message-and-verifying-a-message-signature
-        /*
+        
         const OID: *const u8 = "1.3.14.3.2.26\0".as_ptr();
         let crypt_sign_message_para = CRYPT_SIGN_MESSAGE_PARA {
             cbSize: u32::try_from(std::mem::size_of::<CRYPT_SIGN_MESSAGE_PARA>()).unwrap(),
@@ -75,8 +105,8 @@ unsafe {
                             pszObjId: windows::core::PSTR::from_raw(OID.cast_mut()), 
                             Parameters: CRYPT_INTEGER_BLOB::default() },
             pvHashAuxInfo: ::core::mem::zeroed(),
-            cMsgCert: 1,
-            rgpMsgCert: &mut fresh_cert,
+            cMsgCert: 2,
+            rgpMsgCert: certs_in_signature.as_mut_ptr(),
             cMsgCrl: 0,
             rgpMsgCrl: ::core::mem::zeroed(),
             cAuthAttr: 0,
@@ -107,7 +137,7 @@ unsafe {
         let proc_heap = GetProcessHeap()?;
         let blob_ptr = HeapAlloc(proc_heap, HEAP_ZERO_MEMORY, data_size as _);
 
-        let sign_success_2 = CryptSignMessage(
+        let _sign_success_2 = CryptSignMessage(
             &crypt_sign_message_para,
             windows::Win32::Foundation::BOOL::from(false),
             1,
@@ -116,9 +146,10 @@ unsafe {
             Some(blob_ptr as *mut u8),
             &mut data_size);
         
-        let qs = std::slice::from_raw_parts(blob_ptr as *mut u8, data_size as _);
-        println!("UTF8?: {:02X?}", qs);
-
+        let signed_data = std::slice::from_raw_parts(blob_ptr as *mut u8, data_size as _);
+        std::fs::write("foo.p7b", signed_data).unwrap();
+        //println!("{:02X?}", _signed_data);
+/*
         let _file_interaction = CreateFileW(
             w!("c:\\users\\hrich\\desktop\\root_pkcs7_store.p7b"),
             FILE_GENERIC_WRITE.0,
@@ -133,40 +164,18 @@ unsafe {
             Some(un_wrap.),
             &mut data_size,
             0); */
-        let cert_chain_parameter = CERT_CHAIN_PARA {
-            cbSize: u32::try_from(std::mem::size_of::<CERT_CHAIN_PARA>()).unwrap(),
-            RequestedUsage: windows::Win32::Security::Cryptography::CERT_USAGE_MATCH::default(),
+
+
+        CertFreeCertificateChain(fresh_chain);
+        if FreeLibrary(crypt_ui_instance).as_bool() { 
+            println!("Closed the lib")
         };
-
-        let mut fresh_chain: *mut CERT_CHAIN_CONTEXT = ::core::mem::zeroed();
-        let _cert_chain = windows::Win32::Security::Cryptography::CertGetCertificateChain (
-            None,
-            fresh_cert,
-            ::core::mem::zeroed(),
-            None,
-            &cert_chain_parameter,
-            0,
-            ::core::mem::zeroed(),
-            &mut fresh_chain,
-        );
-        let test = (*(*(*(*(*(*(*fresh_chain).rgpChain)).rgpElement)).pCertContext).pCertInfo).Subject;
-        let test1 = **(*(*(*fresh_chain).rgpChain)).rgpElement;
-        dbg!(test);
-        dbg!(test1);
-
-        if FreeLibrary(crypt_ui_instance).as_bool() { println!("Closed lib") };
-        if !CertFreeCertificateContext(Some(fresh_cert)).as_bool() {
-            println!("Couldn't close the cert context.");
-        } else {
+        if CertFreeCertificateContext(Some(fresh_cert)).as_bool() {
             println!("Closed the fresh_cert");
         }
-        if !CertCloseStore(personal_store, 0).as_bool() {
-            println!("Couldn't close the store.");
-        } else {
+        if CertCloseStore(personal_store, 0).as_bool() {
             println!("Closed the personal_store");
         }
- 
-
     } 
     Ok(())
 }
