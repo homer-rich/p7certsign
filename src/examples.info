@@ -9,7 +9,7 @@ UI::CryptUIDlgViewContext(
     ::core::mem::zeroed(),
 );
 ================================================================================================================
-// Able to read system stores if setting the READONLY flag
+// Open a memory store and able to read system stores if setting the READONLY flag
 let memory_store = CertOpenStore(
     CERT_STORE_PROV_MEMORY,
     CERT_QUERY_ENCODING_TYPE::default(),
