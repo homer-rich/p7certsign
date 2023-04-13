@@ -10,6 +10,7 @@ use std::{
     path::Component,
 };
 use walkdir::WalkDir;
+use windows::Win32::Security::Cryptography::CryptBinaryToStringA;
 use windows::{
     core::*,
     Win32::{
@@ -213,20 +214,19 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT) {
         ::core::mem::zeroed(),
         &mut fresh_chain,
     );
-    let test1 = *(*(*(*fresh_chain).rgpChain)).rgpElement;
-    let test2 = std::slice::from_raw_parts(test1, 3 as _);
+    let chain_pointer = *(*(*(*fresh_chain).rgpChain)).rgpElement;
+    let chain_size = (**(*fresh_chain).rgpChain).cElement;
+    let chain_array = std::slice::from_raw_parts(chain_pointer, chain_size as _);
     // get second cert in data array spot 0 is the default cert, slot 1 is next up in the chain
-    /* let _test3 = std::slice::from_raw_parts(
-    (*(test2[1].pCertContext)).pbCertEncoded,
-    (*(test2[1].pCertContext)).cbCertEncoded as _); */
 
-    let test4 = test2[1].pCertContext.cast_mut();
-    let test5 = *(test2[2].pCertContext);
-    let cert_raw_parts = std::slice::from_raw_parts(test5.pbCertEncoded, test5.cbCertEncoded as _);
-    std::fs::write("root.p7b", cert_raw_parts).unwrap();
+    let intermediate_cert = chain_array[1].pCertContext.cast_mut();
+    let root_cert = *(chain_array[2].pCertContext);
+    let cert_raw_parts = std::slice::from_raw_parts(root_cert.pbCertEncoded, root_cert.cbCertEncoded as _);
+    let binding = convert_from_der_to_pem(cert_raw_parts).unwrap();
+    std::fs::write("dod_pke_chain.der", binding.as_bytes()).unwrap();
+    
     // get chain size
-    dbg!((**(*fresh_chain).rgpChain).cElement);
-    let mut certs_in_signature: Vec<*mut CERT_CONTEXT> = vec![test4, fresh_cert];
+    let mut certs_in_signature: Vec<*mut CERT_CONTEXT> = vec![intermediate_cert, fresh_cert];
 
     // Sign a file with the selected cert
     // https://learn.microsoft.com/en-us/windows/win32/seccrypto/example-c-program-signing-a-message-and-verifying-a-message-signature
@@ -272,8 +272,7 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT) {
     let s_val = PCSTR(sha256_string.as_ptr());
     let sign_me: Vec<*const u8> = vec![s_val.as_ptr()];
     let to_be_signed_sizes_array: Vec<u32> = vec![
-        //u32::try_from(secret_message.as_bytes().len()).unwrap(),);
-        u32::try_from(s_val.as_bytes().len()).unwrap(),
+        u32::try_from(s_val.as_bytes().len()).unwrap()
     ];
     let slice = to_be_signed_sizes_array.into_boxed_slice();
     let mut data_size = 0;
@@ -325,7 +324,7 @@ pub unsafe fn convert_from_pem_to_der(pem: &[u8]) -> Result<Vec<u8>> {
     if ok == false {
         return Err(Error::new(
             GetLastError().to_hresult(),
-            HSTRING::from("Failed converting from PEM to DER part 2"),
+            HSTRING::from("Failed converting from PEM to DER part 1"),
         ));
     }
 
@@ -346,5 +345,40 @@ pub unsafe fn convert_from_pem_to_der(pem: &[u8]) -> Result<Vec<u8>> {
         ));
     } else {
         return Ok(buf);
+    }
+}
+
+pub unsafe fn convert_from_der_to_pem(der: &[u8]) -> Result<PSTR> {
+    let mut read_len = 0;
+    let ok = CryptBinaryToStringA(
+        der,
+        CRYPT_STRING_BASE64HEADER,
+        ::core::mem::zeroed(),
+        &mut read_len
+    );
+    if ok == false {
+        return Err(Error::new(
+            GetLastError().to_hresult(),
+            HSTRING::from("Failed converting from PEM to DER part 1"),
+        ));
+    }
+
+    let mut buf = vec![0; read_len as usize];
+    let mut pstr_buf = PSTR(buf.as_ptr() as _);
+
+    let ok = CryptBinaryToStringA(
+        der,
+        CRYPT_STRING_BASE64HEADER,
+        pstr_buf,
+        &mut read_len
+    );
+
+    if ok == false {
+        return Err(Error::new(
+            GetLastError().to_hresult(),
+            HSTRING::from("Failed converting from PEM to DER part 2"),
+        ));
+    } else {
+        Ok(pstr_buf)
     }
 }
