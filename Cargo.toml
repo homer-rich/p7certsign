@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 sha256 = "1.1.2"
 walkdir = "2.3.3"
+zip = "0.6.4"
 [dependencies.windows]
 version = "0.48.0"
 features = [

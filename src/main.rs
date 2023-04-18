@@ -10,19 +10,19 @@ use std::{
     path::Component,
 };
 use walkdir::WalkDir;
-use windows::Win32::Security::Cryptography::CryptBinaryToStringA;
 use windows::{
     core::*,
     Win32::{
         Foundation::GetLastError,
         Security::Cryptography::{
-            CertAddCertificateContextToStore, CertCloseStore, CertCreateCertificateContext,
-            CertFreeCertificateChain, CertFreeCertificateContext, CertOpenStore, CertSaveStore,
-            CryptSignMessage, CryptStringToBinaryA, CryptStringToBinaryW, CERT_CHAIN_CONTEXT,
-            CERT_CHAIN_PARA, CERT_CONTEXT, CERT_OPEN_STORE_FLAGS, CERT_QUERY_ENCODING_TYPE,
+            CertAddCertificateContextToStore, CertAddStoreToCollection, CertCloseStore,
+            CertCreateCertificateContext, CertFreeCertificateChain, CertFreeCertificateContext,
+            CertOpenStore, CertSaveStore, CryptBinaryToStringA, CryptSignMessage,
+            CryptStringToBinaryA, CryptStringToBinaryW, CERT_CHAIN_CONTEXT, CERT_CHAIN_PARA,
+            CERT_CONTEXT, CERT_OPEN_STORE_FLAGS, CERT_QUERY_ENCODING_TYPE,
             CERT_STORE_ADD_REPLACE_EXISTING, CERT_STORE_CERTIFICATE_CONTEXT,
-            CERT_STORE_PROV_MEMORY, CERT_STORE_PROV_SYSTEM_W, CERT_STORE_SAVE_AS_PKCS7,
-            CERT_STORE_SAVE_TO_FILENAME_A, CERT_STORE_SAVE_TO_FILENAME_W,
+            CERT_STORE_PROV_COLLECTION, CERT_STORE_PROV_MEMORY, CERT_STORE_PROV_SYSTEM_W,
+            CERT_STORE_SAVE_AS_PKCS7, CERT_STORE_SAVE_TO_FILENAME_A, CERT_STORE_SAVE_TO_FILENAME_W,
             CERT_SYSTEM_STORE_CURRENT_USER_ID, CERT_SYSTEM_STORE_LOCATION_SHIFT,
             CRYPT_ALGORITHM_IDENTIFIER, CRYPT_INTEGER_BLOB, CRYPT_SIGN_MESSAGE_PARA,
             CRYPT_STRING_BASE64HEADER, HCERTSTORE, HCRYPTPROV_LEGACY, PKCS_7_ASN_ENCODING,
@@ -48,6 +48,14 @@ fn main() -> Result<()> {
         select_signing_cert(&mut fresh_cert)?;
         let mut bundles: HashMap<String, HCERTSTORE> = HashMap::new();
         let mut current_dir_string: String;
+        if std::fs::metadata("current_build").is_err() {
+            std::fs::create_dir("current_build").unwrap();
+        }
+        let mut readme_string: String =
+            String::from_utf8_lossy(include_bytes!("readme_template.txt")).into();
+        readme_string = readme_string.replace("IRFILENAME", "new_file_name");
+        readme_string = readme_string.replace("SIGNINGCHAIN", "dod_pke_chain.pem");
+        std::fs::write("current_build/README.txt", readme_string.as_bytes()).unwrap();
 
         for entry in WalkDir::new("certificates")
             .into_iter()
@@ -91,12 +99,22 @@ fn main() -> Result<()> {
             }
         }
 
+        let mut collection_store = CertOpenStore(
+            CERT_STORE_PROV_COLLECTION,
+            CERT_QUERY_ENCODING_TYPE::default(),
+            HCRYPTPROV_LEGACY::default(),
+            CERT_OPEN_STORE_FLAGS(0),
+            ::core::mem::zeroed(),
+        )?;
         for y in bundles.into_iter() {
-            let mut file_name = "certificates_pkcs7_5_12_".to_owned();
+            let mut file_name = "current_build/certificates_pkcs7_5_12_".to_owned();
             file_name.push_str(y.0.as_str());
             file_name.push_str(".p7b\0");
 
-            let file_name_ptr = PCSTR(file_name.as_ptr()).as_ptr();
+            CertAddStoreToCollection(collection_store, y.1, 0, 0);
+
+            // create individual files for each bundle
+            /* let file_name_ptr = PCSTR(file_name.as_ptr()).as_ptr();
             CertSaveStore(
                 y.1,
                 PKCS_7_ASN_ENCODING | X509_ASN_ENCODING,
@@ -104,17 +122,45 @@ fn main() -> Result<()> {
                 CERT_STORE_SAVE_TO_FILENAME_A,
                 file_name_ptr as _,
                 0,
-            );
+            ); */
 
-            if CertCloseStore(y.1, 0).as_bool() {
-                println!("Closed the {} memory_store", y.0);
+            if !CertCloseStore(y.1, 0).as_bool() {
+                println!("Failed to close the {} memory_store", y.0);
+            }
+        }
+        let collection_name = s!("current_build/collection.p7b");
+        CertSaveStore(
+            collection_store,
+            PKCS_7_ASN_ENCODING | X509_ASN_ENCODING,
+            CERT_STORE_SAVE_AS_PKCS7,
+            CERT_STORE_SAVE_TO_FILENAME_A,
+            collection_name.as_ptr() as _,
+            0,
+        );
+
+        //do_the_signing(fresh_cert);
+        let mut zipper = std::fs::File::create("zip_zopp.zip").unwrap();
+        let mut zip = zip::ZipWriter::new(zipper);
+        let zip_options = zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        
+
+        for entry in WalkDir::new("current_build")
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if entry.path().is_file() {
+                let current_file = entry.path().file_name().unwrap().to_str().unwrap();
+                //dbg!(current_file);
+                //dbg!(&entry);
+                zip.start_file(current_file, zip_options).unwrap();
+                zip.write_all(&std::fs::read(entry.path().to_str().unwrap()).unwrap()).unwrap();
             }
         }
 
-        do_the_signing(fresh_cert);
+        zip.finish().unwrap();
 
-        if CertFreeCertificateContext(Some(fresh_cert)).as_bool() {
-            println!("Closed the fresh_cert");
+        if !CertFreeCertificateContext(Some(fresh_cert)).as_bool() {
+            println!("Failed to close fresh_cert");
         }
     }
     Ok(())
@@ -163,6 +209,9 @@ pub unsafe fn select_signing_cert(fresh_cert: *mut *mut CERT_CONTEXT) -> Result<
         s!("CertSelectCertificateW"),
     ));
     cert_select_certificate_w(&cert_select_struct);
+    if fresh_cert.read().is_null() {
+        panic!("No certificate selected for signature.  Exiting.")
+    }
 
     // clean-up
     if FreeLibrary(crypt_ui_instance).as_bool() {
@@ -170,9 +219,6 @@ pub unsafe fn select_signing_cert(fresh_cert: *mut *mut CERT_CONTEXT) -> Result<
     };
     if CertCloseStore(personal_store, 0).as_bool() {
         println!("Closed the personal_store");
-    }
-    if fresh_cert.is_null() {
-        std::process::exit(1);
     }
     Ok(())
 }
@@ -221,10 +267,11 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT) {
 
     let intermediate_cert = chain_array[1].pCertContext.cast_mut();
     let root_cert = *(chain_array[2].pCertContext);
-    let cert_raw_parts = std::slice::from_raw_parts(root_cert.pbCertEncoded, root_cert.cbCertEncoded as _);
+    let cert_raw_parts =
+        std::slice::from_raw_parts(root_cert.pbCertEncoded, root_cert.cbCertEncoded as _);
     let binding = convert_from_der_to_pem(cert_raw_parts).unwrap();
-    std::fs::write("dod_pke_chain.der", binding.as_bytes()).unwrap();
-    
+    std::fs::write("current_build/dod_pke_chain.pem", binding.as_bytes()).unwrap();
+
     // get chain size
     let mut certs_in_signature: Vec<*mut CERT_CONTEXT> = vec![intermediate_cert, fresh_cert];
 
@@ -271,14 +318,12 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT) {
 
     let s_val = PCSTR(sha256_string.as_ptr());
     let sign_me: Vec<*const u8> = vec![s_val.as_ptr()];
-    let to_be_signed_sizes_array: Vec<u32> = vec![
-        u32::try_from(s_val.as_bytes().len()).unwrap()
-    ];
+    let to_be_signed_sizes_array: Vec<u32> = vec![u32::try_from(s_val.as_bytes().len()).unwrap()];
     let slice = to_be_signed_sizes_array.into_boxed_slice();
     let mut data_size = 0;
 
     // First call sets up variables to receive the size of the signed data.
-    let sign_success = CryptSignMessage(
+    let _sign_success = CryptSignMessage(
         &crypt_sign_message_para,
         windows::Win32::Foundation::BOOL::from(false),
         1,
@@ -288,7 +333,7 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT) {
         &mut data_size,
     );
 
-    println!("First call complete. Sign Success:{:?}", sign_success);
+    // println!("First call complete. Sign Success:{:?}", sign_success);
 
     let proc_heap = GetProcessHeap().unwrap();
     let blob_ptr = HeapAlloc(proc_heap, HEAP_ZERO_MEMORY, data_size as _);
@@ -303,9 +348,10 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT) {
         &mut data_size,
     );
 
+    // println!("Second call complete. Sign Success:{:?}", sign_success_2);
     let signed_data = std::slice::from_raw_parts(blob_ptr as *mut u8, data_size as _);
-    std::fs::write("foo.pkcs7", signed_data).unwrap();
-    //println!("{:02X?}", _signed_data);
+    std::fs::write("current_build/certificates.sha256", signed_data).unwrap();
+    // println!("{:02X?}", _signed_data);
 
     // clean-up
     CertFreeCertificateChain(fresh_chain);
@@ -324,7 +370,7 @@ pub unsafe fn convert_from_pem_to_der(pem: &[u8]) -> Result<Vec<u8>> {
     if ok == false {
         return Err(Error::new(
             GetLastError().to_hresult(),
-            HSTRING::from("Failed converting from PEM to DER part 1"),
+            HSTRING::from("Failed converting from PEM to DER while getting the size."),
         ));
     }
 
@@ -341,44 +387,38 @@ pub unsafe fn convert_from_pem_to_der(pem: &[u8]) -> Result<Vec<u8>> {
     if ok == false {
         return Err(Error::new(
             GetLastError().to_hresult(),
-            HSTRING::from("Failed converting from PEM to DER part 2"),
+            HSTRING::from("Failed converting from PEM to DER while tansforming."),
         ));
     } else {
-        return Ok(buf);
+        Ok(buf)
     }
 }
 
-pub unsafe fn convert_from_der_to_pem(der: &[u8]) -> Result<PSTR> {
+pub unsafe fn convert_from_der_to_pem(der: &[u8]) -> Result<String> {
     let mut read_len = 0;
     let ok = CryptBinaryToStringA(
         der,
         CRYPT_STRING_BASE64HEADER,
         ::core::mem::zeroed(),
-        &mut read_len
+        &mut read_len,
     );
     if ok == false {
         return Err(Error::new(
             GetLastError().to_hresult(),
-            HSTRING::from("Failed converting from PEM to DER part 1"),
+            HSTRING::from("Failed converting from DER to PEM while getting size."),
         ));
     }
-
     let mut buf = vec![0; read_len as usize];
     let mut pstr_buf = PSTR(buf.as_ptr() as _);
 
-    let ok = CryptBinaryToStringA(
-        der,
-        CRYPT_STRING_BASE64HEADER,
-        pstr_buf,
-        &mut read_len
-    );
+    let ok = CryptBinaryToStringA(der, CRYPT_STRING_BASE64HEADER, pstr_buf, &mut read_len);
 
     if ok == false {
         return Err(Error::new(
             GetLastError().to_hresult(),
-            HSTRING::from("Failed converting from PEM to DER part 2"),
+            HSTRING::from("Failed converting from DER to PEM while transforming."),
         ));
     } else {
-        Ok(pstr_buf)
+        Ok(pstr_buf.to_string().unwrap())
     }
 }
