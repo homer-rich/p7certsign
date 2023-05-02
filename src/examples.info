@@ -122,3 +122,14 @@ let success = CertSaveStore(
 //MessageBoxW(None, w!("Wide"), w!("Caption"), windows::Win32::UI::WindowsAndMessaging::MB_OK);
 //println!("We happy?:  {:?}", success);
 //println!("We saved to memory?:  {:?}", save_to_store);
+
+
+
+
+/* let mut collection_store = CertOpenStore(
+    CERT_STORE_PROV_COLLECTION,
+    CERT_QUERY_ENCODING_TYPE::default(),
+    HCRYPTPROV_LEGACY::default(),
+    CERT_OPEN_STORE_FLAGS(0),
+    ::core::mem::zeroed(),
+)?; */

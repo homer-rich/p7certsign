@@ -1,3 +1,5 @@
 /target
 .vscode/*
 /certificates/*/*.cer
+/current_build
+*.zip
