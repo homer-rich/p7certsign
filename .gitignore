@@ -3,3 +3,5 @@
 /certificates/*/*.cer
 /current_build
 *.zip
+# Also p7b while doing testing
+*.p7b

@@ -10,7 +10,7 @@ use std::{
     path::Component,
 };
 use walkdir::WalkDir;
-use windows::Win32::Security::Cryptography::{CertGetNameStringA, CERT_NAME_SIMPLE_DISPLAY_TYPE};
+use windows::Win32::Security::Cryptography::{CertGetNameStringA, CERT_NAME_SIMPLE_DISPLAY_TYPE, CERT_NAME_ISSUER_FLAG};
 use windows::{
     core::*,
     Win32::{
@@ -45,6 +45,7 @@ fn main() -> Result<()> {
     unsafe {
         let mut fresh_cert: *mut CERT_CONTEXT = ::core::mem::zeroed();
         let mut bundles: HashMap<String, (String, HCERTSTORE)> = HashMap::new();
+        let mut root_bundles: HashMap<String, HCERTSTORE> = HashMap::new();
 
         let mut current_dir_string: String;
         let readme_string_original: String =
@@ -69,6 +70,7 @@ fn main() -> Result<()> {
                 println!("Run bundle for {}? ([Y]es/[N]o/[Q]uit)", current_dir_string);
                 let mut run_bundle = user_input_for_bundle();
 
+                // Create and loop through main bundle
                 if run_bundle.contains("_") {
                     let mut temp_store = CertOpenStore(
                         CERT_STORE_PROV_MEMORY,
@@ -93,17 +95,95 @@ fn main() -> Result<()> {
                             );
 
                             if test_add.as_bool() {
-                                //let subjectt = std::slice::from_raw_parts(cert_context.read().pCertInfo.read().Subject.pbData, cert_context.read().pCertInfo.read().Subject.cbData as _);
-                                println!("Successfully added {} to {}", get_cert_subject_string(cert_context).unwrap_or("Unknown Cert".to_owned()), &current_dir_string);
-                                //println!("Successfully added {} to {}", String::from_utf8_lossy(subjectt) ,&current_dir_string);
+                                println!(
+                                    "\nSuccessfully added cert with Subject: {} and\nIssuer: {} to the {} bundle.",
+                                    get_cert_subject(cert_context)
+                                        .unwrap_or("Unknown Cert Subject".to_owned()),
+                                    get_cert_issuer(cert_context)
+                                        .unwrap_or("Unknown Cert Issuer".to_owned()),
+                                    &current_dir_string
+                                );
                                 //{:02X?}
                             }
+                        }
+                    }
+                    // Create the mini bundles that denote each CA the certs are rooted in.
+                    for certificate_file in entry.path().read_dir().expect("read_dir call failure")
+                    {
+                        let current_file = certificate_file.unwrap().path();
+                        if current_file.is_file() && current_file.extension().unwrap() == "cer" {
+                            let cert_context =
+                                get_context_cert_file(&std::fs::read(current_file).unwrap())?;
+
+                            let cert_chain_parameter = CERT_CHAIN_PARA {
+                                cbSize: u32::try_from(std::mem::size_of::<CERT_CHAIN_PARA>()).unwrap(),
+                                RequestedUsage: windows::Win32::Security::Cryptography::CERT_USAGE_MATCH::default(),
+                            };
+                        
+                            let mut fresh_chain: *mut CERT_CHAIN_CONTEXT = ::core::mem::zeroed();
+                            windows::Win32::Security::Cryptography::CertGetCertificateChain(
+                                None,
+                                cert_context,
+                                ::core::mem::zeroed(),
+                                temp_store,
+                                &cert_chain_parameter,
+                                0,
+                                ::core::mem::zeroed(),
+                                &mut fresh_chain,
+                            );
+                            let chain_pointer = *(*(*(*fresh_chain).rgpChain)).rgpElement;
+                            let chain_size = (**(*fresh_chain).rgpChain).cElement;
+                            let chain_array = std::slice::from_raw_parts(chain_pointer, chain_size as _);
+                            let mut root_cert = chain_array.last().unwrap().pCertContext.cast_mut();
+                            let root_name = get_cert_subject(root_cert).unwrap_or("unknown_root".to_owned());
+
+                            let mut update_store: HCERTSTORE;
+                            if root_bundles.contains_key(&root_name) {
+                                update_store = *(root_bundles.get(&root_name).unwrap());
+                                
+                            } else {
+                                update_store = CertOpenStore(
+                                    CERT_STORE_PROV_MEMORY,
+                                    CERT_QUERY_ENCODING_TYPE::default(),
+                                    HCRYPTPROV_LEGACY::default(),
+                                    CERT_OPEN_STORE_FLAGS(0),
+                                    ::core::mem::zeroed(),
+                                )?;
+                                root_bundles.insert(root_name, update_store);
+                            }
+                            let test_add = CertAddCertificateContextToStore(
+                                update_store,
+                                cert_context,
+                                CERT_STORE_ADD_REPLACE_EXISTING,
+                                None,
+                            );
+
+                            if test_add.as_bool() {
+                                dbg!(update_store);
+                                //println!("Added cert to root: {}", root_name);
+                            } 
                         }
                     }
                 } else if run_bundle.contains("q") {
                     break;
                 }
             }
+        }
+
+        for x in root_bundles.into_iter() {
+            let mut root_file_name = x.0.replace(" ", "_").replace("\0", "");
+            root_file_name.push_str(".p7b\0");
+            dbg!(&root_file_name);
+            let p7b_root_file_name_ptr = PCSTR(root_file_name.as_ptr()).as_ptr();
+            dbg!(p7b_root_file_name_ptr);
+            CertSaveStore(
+                x.1,
+                PKCS_7_ASN_ENCODING | X509_ASN_ENCODING,
+                CERT_STORE_SAVE_AS_PKCS7,
+                CERT_STORE_SAVE_TO_FILENAME_A,
+                p7b_root_file_name_ptr as _,
+                0,
+            );
         }
 
         for y in bundles.into_iter() {
@@ -157,26 +237,48 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-pub unsafe fn get_cert_subject_string(cert: *mut CERT_CONTEXT) -> Option<String> {
+pub unsafe fn get_cert_subject(cert: *mut CERT_CONTEXT) -> Option<String> {
     let array_size = CertGetNameStringA(
         cert,
         CERT_NAME_SIMPLE_DISPLAY_TYPE,
         ::core::mem::zeroed(),
         ::core::mem::zeroed(),
-        None
+        None,
     );
-    let mut buf:Vec<u8> = vec![0; array_size as usize];
+    let mut buf: Vec<u8> = vec![0; array_size as usize];
 
     CertGetNameStringA(
         cert,
         CERT_NAME_SIMPLE_DISPLAY_TYPE,
         ::core::mem::zeroed(),
         ::core::mem::zeroed(),
-        Some(&mut buf)
+        Some(&mut buf),
     );
-    
+
     let subject_string = String::from_utf8_lossy(&buf).to_string();
-    Some(subject_string)
+    Some(subject_string.trim_end().to_string())
+}
+
+pub unsafe fn get_cert_issuer(cert: *mut CERT_CONTEXT) -> Option<String> {
+    let array_size = CertGetNameStringA(
+        cert,
+        CERT_NAME_SIMPLE_DISPLAY_TYPE,
+        CERT_NAME_ISSUER_FLAG,
+        ::core::mem::zeroed(),
+        None,
+    );
+    let mut buf: Vec<u8> = vec![0; array_size as usize];
+
+    CertGetNameStringA(
+        cert,
+        CERT_NAME_SIMPLE_DISPLAY_TYPE,
+        CERT_NAME_ISSUER_FLAG,
+        ::core::mem::zeroed(),
+        Some(&mut buf),
+    );
+
+    let issuer_string = String::from_utf8_lossy(&buf).to_string();
+    Some(issuer_string.trim_end().to_string())
 }
 
 pub unsafe fn select_signing_cert(fresh_cert: *mut *mut CERT_CONTEXT) -> Result<()> {
@@ -290,8 +392,10 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT) {
         )
         .unwrap();
     } else {
-        let intermed_cert_raw_parts =
-            std::slice::from_raw_parts((*intermediate_cert).pbCertEncoded, (*intermediate_cert).cbCertEncoded as _);
+        let intermed_cert_raw_parts = std::slice::from_raw_parts(
+            (*intermediate_cert).pbCertEncoded,
+            (*intermediate_cert).cbCertEncoded as _,
+        );
         let intermed_cert_pem_string = convert_from_der_to_pem(intermed_cert_raw_parts).unwrap();
         std::fs::write(
             "current_build/intermed_pke_chain.pem",
@@ -299,7 +403,6 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT) {
         )
         .unwrap();
     }
-    
 
     // get chain size
     let mut certs_in_signature: Vec<*mut CERT_CONTEXT> = vec![intermediate_cert, fresh_cert];
@@ -453,7 +556,7 @@ pub unsafe fn convert_from_der_to_pem(der: &[u8]) -> Result<String> {
 }
 
 pub unsafe fn zip_up_bundle(file_name: String) {
-    let mut zip_file_name = file_name;
+    let mut zip_file_name = file_name.clone();
     zip_file_name.push_str(".zip");
     let mut zipper = std::fs::File::create(zip_file_name).unwrap();
     let mut zip = zip::ZipWriter::new(zipper);
@@ -466,7 +569,7 @@ pub unsafe fn zip_up_bundle(file_name: String) {
     {
         if entry.path().is_file() {
             let current_file = entry.path().file_name().unwrap().to_str().unwrap();
-            zip.start_file(current_file, zip_options).unwrap();
+            zip.start_file(file_name.clone() + "/" + current_file, zip_options).unwrap();
             zip.write_all(&std::fs::read(entry.path().to_str().unwrap()).unwrap())
                 .unwrap();
         }
