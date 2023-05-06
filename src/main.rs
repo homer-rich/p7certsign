@@ -44,7 +44,7 @@ const BUILD_DIRECTORY: &str = "current_build";
 fn main() -> Result<()> {
     unsafe {
         let mut fresh_cert: *mut CERT_CONTEXT = ::core::mem::zeroed();
-        let mut bundles: HashMap<String, (String, HCERTSTORE)> = HashMap::new();
+        let mut _bundles: HashMap<String, (String, HCERTSTORE)> = HashMap::new();
         let mut root_bundles: HashMap<String, HCERTSTORE> = HashMap::new();
 
         let mut current_dir_string: String;
@@ -72,23 +72,23 @@ fn main() -> Result<()> {
 
                 // Create and loop through main bundle
                 if run_bundle.contains("_") {
-                    let mut temp_store = CertOpenStore(
+                    let mut main_store = CertOpenStore(
                         CERT_STORE_PROV_MEMORY,
                         CERT_QUERY_ENCODING_TYPE::default(),
                         HCRYPTPROV_LEGACY::default(),
                         CERT_OPEN_STORE_FLAGS(0),
                         ::core::mem::zeroed(),
                     )?;
-                    bundles.insert(current_dir_string.clone(), (run_bundle, temp_store));
+                    //bundles.insert(current_dir_string.clone(), (run_bundle, temp_store));
                     for certificate_file in entry.path().read_dir().expect("read_dir call failure")
                     {
                         let current_file = certificate_file.unwrap().path();
                         if current_file.is_file() && current_file.extension().unwrap() == "cer" {
                             let cert_context =
                                 get_context_cert_file(&std::fs::read(current_file).unwrap())?;
-                            let update_store = bundles.get(&current_dir_string).unwrap().1;
+                            //let update_store = bundles.get(&current_dir_string).unwrap().1;
                             let test_add = CertAddCertificateContextToStore(
-                                update_store,
+                                main_store,
                                 cert_context,
                                 CERT_STORE_ADD_REPLACE_EXISTING,
                                 None,
@@ -125,7 +125,7 @@ fn main() -> Result<()> {
                                 None,
                                 cert_context,
                                 ::core::mem::zeroed(),
-                                temp_store,
+                                main_store,
                                 &cert_chain_parameter,
                                 0,
                                 ::core::mem::zeroed(),
@@ -159,10 +159,71 @@ fn main() -> Result<()> {
                             );
 
                             if test_add.as_bool() {
-                                dbg!(update_store);
+                                //dbg!(update_store);
                                 //println!("Added cert to root: {}", root_name);
                             } 
                         }
+                    }
+
+                    if std::fs::metadata(BUILD_DIRECTORY).is_err() {
+                        std::fs::create_dir(BUILD_DIRECTORY).unwrap();
+                    } else {
+                        std::fs::remove_dir_all(BUILD_DIRECTORY).unwrap();
+                        std::fs::create_dir(BUILD_DIRECTORY).unwrap();
+                    }
+        
+                    let mut file_name = "certificates_pkcs7_v".to_owned();
+                    file_name.push_str(run_bundle.trim());
+                    file_name.push('_');
+                    file_name.push_str(current_dir_string.to_lowercase().as_str());
+        
+                    let mut p7b_file_name = file_name.clone();
+                    p7b_file_name.push_str(".p7b\0");
+        
+                    std::env::set_current_dir(BUILD_DIRECTORY).unwrap();
+                    // create individual files for each bundle
+                    let p7b_file_name_ptr = PCSTR(p7b_file_name.as_ptr()).as_ptr();
+                    CertSaveStore(
+                        main_store,
+                        PKCS_7_ASN_ENCODING | X509_ASN_ENCODING,
+                        CERT_STORE_SAVE_AS_PKCS7,
+                        CERT_STORE_SAVE_TO_FILENAME_A,
+                        p7b_file_name_ptr as _,
+                        0,
+                    );
+
+                    for x in root_bundles.clone().into_iter() {
+                        let mut root_file_name = file_name.clone();
+                        root_file_name.push('_');
+                        root_file_name.push_str(x.0.replace(" ", "_").replace("\0", "").as_str());
+                        root_file_name.push_str(".p7b\0");
+                        let p7b_root_file_name_ptr = PCSTR(root_file_name.as_ptr()).as_ptr();
+                        CertSaveStore(
+                            x.1,
+                            PKCS_7_ASN_ENCODING | X509_ASN_ENCODING,
+                            CERT_STORE_SAVE_AS_PKCS7,
+                            CERT_STORE_SAVE_TO_FILENAME_A,
+                            p7b_root_file_name_ptr as _,
+                            0,
+                        );
+
+                        if !CertCloseStore(x.1, 0).as_bool() {
+                            println!("Failed to close the {} memory_store", x.0);
+                        }
+                    }
+                    root_bundles.clear();
+
+                    let mut readme_string =
+                        readme_string_original.replace("IRFILENAME", p7b_file_name.as_str());
+                    readme_string = readme_string.replace("SIGNINGCHAIN", "dod_pke_chain.pem");
+                    std::fs::write("README.txt", readme_string.as_bytes()).unwrap();
+        
+                    std::env::set_current_dir("..").unwrap();
+                    do_the_signing(fresh_cert);
+                    zip_up_bundle(file_name);
+        
+                    if !CertCloseStore(main_store, 0).as_bool() {
+                        println!("Failed to close the {} memory_store", current_dir_string);
                     }
                 } else if run_bundle.contains("q") {
                     break;
@@ -170,62 +231,8 @@ fn main() -> Result<()> {
             }
         }
 
-        for x in root_bundles.into_iter() {
-            let mut root_file_name = x.0.replace(" ", "_").replace("\0", "");
-            root_file_name.push_str(".p7b\0");
-            dbg!(&root_file_name);
-            let p7b_root_file_name_ptr = PCSTR(root_file_name.as_ptr()).as_ptr();
-            dbg!(p7b_root_file_name_ptr);
-            CertSaveStore(
-                x.1,
-                PKCS_7_ASN_ENCODING | X509_ASN_ENCODING,
-                CERT_STORE_SAVE_AS_PKCS7,
-                CERT_STORE_SAVE_TO_FILENAME_A,
-                p7b_root_file_name_ptr as _,
-                0,
-            );
-        }
+        
 
-        for y in bundles.into_iter() {
-            if std::fs::metadata(BUILD_DIRECTORY).is_err() {
-                std::fs::create_dir(BUILD_DIRECTORY).unwrap();
-            } else {
-                std::fs::remove_dir_all(BUILD_DIRECTORY).unwrap();
-                std::fs::create_dir(BUILD_DIRECTORY).unwrap();
-            }
-
-            let mut file_name = "certificates_pkcs7_v".to_owned();
-            file_name.push_str(y.1 .0.trim());
-            file_name.push('_');
-            file_name.push_str(y.0.as_str());
-
-            let mut p7b_file_name = file_name.clone();
-            p7b_file_name.push_str(".p7b\0");
-
-            std::env::set_current_dir(BUILD_DIRECTORY).unwrap();
-            // create individual files for each bundle
-            let p7b_file_name_ptr = PCSTR(p7b_file_name.as_ptr()).as_ptr();
-            CertSaveStore(
-                y.1 .1,
-                PKCS_7_ASN_ENCODING | X509_ASN_ENCODING,
-                CERT_STORE_SAVE_AS_PKCS7,
-                CERT_STORE_SAVE_TO_FILENAME_A,
-                p7b_file_name_ptr as _,
-                0,
-            );
-            let mut readme_string =
-                readme_string_original.replace("IRFILENAME", p7b_file_name.as_str());
-            readme_string = readme_string.replace("SIGNINGCHAIN", "dod_pke_chain.pem");
-            std::fs::write("README.txt", readme_string.as_bytes()).unwrap();
-
-            std::env::set_current_dir("..").unwrap();
-            do_the_signing(fresh_cert);
-            zip_up_bundle(file_name);
-
-            if !CertCloseStore(y.1 .1, 0).as_bool() {
-                println!("Failed to close the {} memory_store", y.0);
-            }
-        }
         // Clean-up
         if !CertFreeCertificateContext(Some(fresh_cert)).as_bool() {
             println!("Failed to close fresh_cert");
