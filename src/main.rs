@@ -1,5 +1,4 @@
 #![allow(unused_imports)]
-#![allow(unused_mut)]
 use std::path::Path;
 use std::{
     collections::HashMap,
@@ -74,6 +73,8 @@ fn main() -> Result<()> {
 
                 // Create and loop through main bundle
                 if run_bundle.contains("_") {
+
+                    // Create Main Bundle, stored in memory at first.
                     let mut main_store = CertOpenStore(
                         CERT_STORE_PROV_MEMORY,
                         CERT_QUERY_ENCODING_TYPE::default(),
@@ -81,32 +82,15 @@ fn main() -> Result<()> {
                         CERT_OPEN_STORE_FLAGS(0),
                         ::core::mem::zeroed(),
                     )?;
-                    //bundles.insert(current_dir_string.clone(), (run_bundle, temp_store));
+
                     for certificate_file in entry.path().read_dir().expect("read_dir call failure")
                     {
                         let current_file = certificate_file.unwrap().path();
                         if current_file.is_file() && current_file.extension().unwrap() == "cer" {
                             let cert_context =
                                 get_context_cert_file(&std::fs::read(current_file).unwrap())?;
-                            //let update_store = bundles.get(&current_dir_string).unwrap().1;
-                            let test_add = CertAddCertificateContextToStore(
-                                main_store,
-                                cert_context,
-                                CERT_STORE_ADD_REPLACE_EXISTING,
-                                None,
-                            );
 
-                            if test_add.as_bool() {
-                                println!(
-                                    "\nSuccessfully added cert with Subject: {} and\nIssuer: {} to the {} bundle.",
-                                    get_cert_subject(cert_context)
-                                        .unwrap_or("Unknown Cert Subject".to_owned()),
-                                    get_cert_issuer(cert_context)
-                                        .unwrap_or("Unknown Cert Issuer".to_owned()),
-                                    &current_dir_string
-                                );
-                                //{:02X?}
-                            }
+                            add_cert_to_bundle(cert_context, main_store, &current_dir_string);
                         }
                     }
                     // Create the mini bundles that denote each CA the certs are rooted in.
@@ -117,29 +101,8 @@ fn main() -> Result<()> {
                             let cert_context =
                                 get_context_cert_file(&std::fs::read(current_file).unwrap())?;
 
-                            let cert_chain_parameter = CERT_CHAIN_PARA {
-                                cbSize: u32::try_from(std::mem::size_of::<CERT_CHAIN_PARA>()).unwrap(),
-                                RequestedUsage: windows::Win32::Security::Cryptography::CERT_USAGE_MATCH::default(),
-                            };
-
-                            let mut fresh_chain: *mut CERT_CHAIN_CONTEXT = ::core::mem::zeroed();
-                            windows::Win32::Security::Cryptography::CertGetCertificateChain(
-                                None,
-                                cert_context,
-                                ::core::mem::zeroed(),
-                                main_store,
-                                &cert_chain_parameter,
-                                0,
-                                ::core::mem::zeroed(),
-                                &mut fresh_chain,
-                            );
-                            let chain_pointer = *(*(*(*fresh_chain).rgpChain)).rgpElement;
-                            let chain_size = (**(*fresh_chain).rgpChain).cElement;
-                            let chain_array =
-                                std::slice::from_raw_parts(chain_pointer, chain_size as _);
-                            let mut root_cert = chain_array.last().unwrap().pCertContext.cast_mut();
-                            let root_name =
-                                get_cert_subject(root_cert).unwrap_or("unknown_root".to_owned());
+                            
+                            let root_name = get_chain_root_subject(cert_context, main_store);
 
                             let mut update_store: HCERTSTORE;
                             if root_bundles.contains_key(&root_name) {
@@ -154,20 +117,10 @@ fn main() -> Result<()> {
                                 )?;
                                 root_bundles.insert(root_name, update_store);
                             }
-                            let test_add = CertAddCertificateContextToStore(
-                                update_store,
-                                cert_context,
-                                CERT_STORE_ADD_REPLACE_EXISTING,
-                                None,
-                            );
-
-                            if test_add.as_bool() {
-                                //dbg!(update_store);
-                                //println!("Added cert to root: {}", root_name);
-                            }
+                            add_cert_to_bundle_quiet(cert_context, update_store);
                         }
                     }
-
+                    // Clean or create build directory
                     if std::fs::metadata(BUILD_DIRECTORY).is_err() {
                         std::fs::create_dir(BUILD_DIRECTORY).unwrap();
                     } else {
@@ -183,56 +136,38 @@ fn main() -> Result<()> {
                     let mut p7b_file_name = file_name.clone();
                     p7b_file_name.push_str("_der.p7b\0");
 
+                    // Jump into build directory to make files
                     std::env::set_current_dir(BUILD_DIRECTORY).unwrap();
-                    // create individual files for each bundle
-                    let p7b_file_name_ptr = PCSTR(p7b_file_name.as_ptr()).as_ptr();
-                    CertSaveStore(
-                        main_store,
-                        PKCS_7_ASN_ENCODING | X509_ASN_ENCODING,
-                        CERT_STORE_SAVE_AS_PKCS7,
-                        CERT_STORE_SAVE_TO_FILENAME_A,
-                        p7b_file_name_ptr as _,
-                        0,
-                    );
+                    // create base bundle for current bundle
+
+                    save_and_close_store(p7b_file_name, main_store);
 
                     // Create each individual bundle file
                     for x in root_bundles.clone().into_iter() {
                         let mut root_file_name = file_name.clone();
                         root_file_name.push('_');
+                        // Turn spaces into _ and remove any null terminators from windows conversion
                         root_file_name.push_str(x.0.replace(" ", "_").replace("\0", "").as_str());
                         root_file_name.push_str("_der.p7b\0");
-                        let p7b_root_file_name_ptr = PCSTR(root_file_name.as_ptr()).as_ptr();
-                        CertSaveStore(
-                            x.1,
-                            PKCS_7_ASN_ENCODING | X509_ASN_ENCODING,
-                            CERT_STORE_SAVE_AS_PKCS7,
-                            CERT_STORE_SAVE_TO_FILENAME_A,
-                            p7b_root_file_name_ptr as _,
-                            0,
-                        );
 
-                        if !CertCloseStore(x.1, 0).as_bool() {
-                            println!("Failed to close the {} memory_store", x.0);
-                        }
+                        save_and_close_store(root_file_name, x.1);
                     }
                     root_bundles.clear();
 
+                    // Change README to reflect the current build files
                     let mut readme_string =
-                        readme_string_original.replace("IRFILENAME", p7b_file_name.as_str());
+                        readme_string_original.replace("IRFILENAME", file_name.as_str());
                     readme_string = readme_string.replace("SIGNINGCHAIN", "dod_pke_chain.pem");
                     std::fs::write("README.txt", readme_string.as_bytes()).unwrap();
 
                     std::env::set_current_dir("..").unwrap();
                     println!(
-                        " ***** Signing {} using Windows CryptSignMessage function ***** ",
+                        "\n***** Signing {} using Windows CryptSignMessage function ***** ",
                         file_name
                     );
                     do_the_signing(fresh_cert, file_name.clone());
                     zip_up_bundle(file_name);
 
-                    if !CertCloseStore(main_store, 0).as_bool() {
-                        println!("Failed to close the {} memory_store", current_dir_string);
-                    }
                 } else if run_bundle.contains("q") {
                     break;
                 }
@@ -248,6 +183,77 @@ fn main() -> Result<()> {
         std::fs::remove_dir_all(BUILD_DIRECTORY).unwrap();
     }
     Ok(())
+}
+
+pub unsafe fn add_cert_to_bundle(cert_context: *mut CERT_CONTEXT, main_store: HCERTSTORE, current_dir_string: &String) {
+    let test_add = CertAddCertificateContextToStore(
+        main_store,
+        cert_context,
+        CERT_STORE_ADD_REPLACE_EXISTING,
+        None,
+    );
+
+    if test_add.as_bool() {
+        println!(
+            "\nSuccessfully added cert with Subject: {} and\nIssuer: {} to the {} bundle.",
+            get_cert_subject(cert_context)
+                .unwrap_or("Unknown Cert Subject".to_owned()),
+            get_cert_issuer(cert_context)
+                .unwrap_or("Unknown Cert Issuer".to_owned()),
+            &current_dir_string
+        );
+        //{:02X?}
+    }
+}
+
+pub unsafe fn add_cert_to_bundle_quiet(cert_context: *mut CERT_CONTEXT, main_store: HCERTSTORE) {
+    CertAddCertificateContextToStore(
+        main_store,
+        cert_context,
+        CERT_STORE_ADD_REPLACE_EXISTING,
+        None,
+    );
+}
+
+pub unsafe fn save_and_close_store(file_name: String, store_context: HCERTSTORE) {
+    let file_name_pcstr = PCSTR(file_name.as_ptr()).as_ptr();
+    CertSaveStore(
+        store_context,
+        PKCS_7_ASN_ENCODING | X509_ASN_ENCODING,
+        CERT_STORE_SAVE_AS_PKCS7,
+        CERT_STORE_SAVE_TO_FILENAME_A,
+        file_name_pcstr as _,
+        0,
+    );
+
+    if !CertCloseStore(store_context, 0).as_bool() {
+        println!("Failed to close the {} memory_store", file_name);
+    }
+}
+
+unsafe fn get_chain_root_subject(cert_context: *mut CERT_CONTEXT, main_store: HCERTSTORE) -> String {
+    let cert_chain_parameter = CERT_CHAIN_PARA {
+        cbSize: u32::try_from(std::mem::size_of::<CERT_CHAIN_PARA>()).unwrap(),
+        RequestedUsage: windows::Win32::Security::Cryptography::CERT_USAGE_MATCH::default(),
+    };
+
+    let mut fresh_chain: *mut CERT_CHAIN_CONTEXT = ::core::mem::zeroed();
+    windows::Win32::Security::Cryptography::CertGetCertificateChain(
+        None,
+        cert_context,
+        ::core::mem::zeroed(),
+        main_store,
+        &cert_chain_parameter,
+        0,
+        ::core::mem::zeroed(),
+        &mut fresh_chain,
+    );
+    let chain_pointer = *(*(*(*fresh_chain).rgpChain)).rgpElement;
+    let chain_size = (**(*fresh_chain).rgpChain).cElement;
+    let chain_array =
+        std::slice::from_raw_parts(chain_pointer, chain_size as _);
+    let mut root_cert = chain_array.last().unwrap().pCertContext.cast_mut();
+    return get_cert_subject(root_cert).unwrap_or("unknown_root".to_owned());
 }
 
 pub unsafe fn get_cert_subject(cert: *mut CERT_CONTEXT) -> Option<String> {

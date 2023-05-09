@@ -95,6 +95,6 @@ Verify that the output matches the hash listed for the file in the IRFILENAME.sh
 Usage:
 
 Openssl - To export CA certificates to a concatenated PEM file for use as an openssl CAfile (named e.g. DoD_CAs.pem), use the following command:
-openssl pkcs7 -in IRFILENAME_pem.p7b -print_certs -out DoD_CAs.pem
+openssl pkcs7 -in IRFILENAME_der.p7b -inform der -print_certs -out DoD_CAs.pem
 
 For more detailed instructions find our Getting Started with Firefox on Linux guide on our DoD Cyber Exchange PKI-PKE site. End Users > Web Browsers > Mozilla Firefox
