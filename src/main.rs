@@ -10,7 +10,9 @@ use std::{
     path::Component,
 };
 use walkdir::WalkDir;
-use windows::Win32::Security::Cryptography::{CertGetNameStringA, CERT_NAME_SIMPLE_DISPLAY_TYPE, CERT_NAME_ISSUER_FLAG};
+use windows::Win32::Security::Cryptography::{
+    CertGetNameStringA, CERT_NAME_ISSUER_FLAG, CERT_NAME_SIMPLE_DISPLAY_TYPE,
+};
 use windows::{
     core::*,
     Win32::{
@@ -36,6 +38,7 @@ use windows::{
         },
     },
 };
+use zip::DateTime;
 
 // https://learn.microsoft.com/en-us/windows/win32/seccrypto/cryptography-functions
 type CertSelectCertificateW = extern "stdcall" fn(*const CERT_SELECT_STRUCT_W);
@@ -44,7 +47,6 @@ const BUILD_DIRECTORY: &str = "current_build";
 fn main() -> Result<()> {
     unsafe {
         let mut fresh_cert: *mut CERT_CONTEXT = ::core::mem::zeroed();
-        let mut _bundles: HashMap<String, (String, HCERTSTORE)> = HashMap::new();
         let mut root_bundles: HashMap<String, HCERTSTORE> = HashMap::new();
 
         let mut current_dir_string: String;
@@ -119,7 +121,7 @@ fn main() -> Result<()> {
                                 cbSize: u32::try_from(std::mem::size_of::<CERT_CHAIN_PARA>()).unwrap(),
                                 RequestedUsage: windows::Win32::Security::Cryptography::CERT_USAGE_MATCH::default(),
                             };
-                        
+
                             let mut fresh_chain: *mut CERT_CHAIN_CONTEXT = ::core::mem::zeroed();
                             windows::Win32::Security::Cryptography::CertGetCertificateChain(
                                 None,
@@ -133,14 +135,15 @@ fn main() -> Result<()> {
                             );
                             let chain_pointer = *(*(*(*fresh_chain).rgpChain)).rgpElement;
                             let chain_size = (**(*fresh_chain).rgpChain).cElement;
-                            let chain_array = std::slice::from_raw_parts(chain_pointer, chain_size as _);
+                            let chain_array =
+                                std::slice::from_raw_parts(chain_pointer, chain_size as _);
                             let mut root_cert = chain_array.last().unwrap().pCertContext.cast_mut();
-                            let root_name = get_cert_subject(root_cert).unwrap_or("unknown_root".to_owned());
+                            let root_name =
+                                get_cert_subject(root_cert).unwrap_or("unknown_root".to_owned());
 
                             let mut update_store: HCERTSTORE;
                             if root_bundles.contains_key(&root_name) {
                                 update_store = *(root_bundles.get(&root_name).unwrap());
-                                
                             } else {
                                 update_store = CertOpenStore(
                                     CERT_STORE_PROV_MEMORY,
@@ -161,7 +164,7 @@ fn main() -> Result<()> {
                             if test_add.as_bool() {
                                 //dbg!(update_store);
                                 //println!("Added cert to root: {}", root_name);
-                            } 
+                            }
                         }
                     }
 
@@ -171,15 +174,15 @@ fn main() -> Result<()> {
                         std::fs::remove_dir_all(BUILD_DIRECTORY).unwrap();
                         std::fs::create_dir(BUILD_DIRECTORY).unwrap();
                     }
-        
+
                     let mut file_name = "certificates_pkcs7_v".to_owned();
                     file_name.push_str(run_bundle.trim());
                     file_name.push('_');
                     file_name.push_str(current_dir_string.to_lowercase().as_str());
-        
+
                     let mut p7b_file_name = file_name.clone();
-                    p7b_file_name.push_str(".p7b\0");
-        
+                    p7b_file_name.push_str("_der.p7b\0");
+
                     std::env::set_current_dir(BUILD_DIRECTORY).unwrap();
                     // create individual files for each bundle
                     let p7b_file_name_ptr = PCSTR(p7b_file_name.as_ptr()).as_ptr();
@@ -192,11 +195,12 @@ fn main() -> Result<()> {
                         0,
                     );
 
+                    // Create each individual bundle file
                     for x in root_bundles.clone().into_iter() {
                         let mut root_file_name = file_name.clone();
                         root_file_name.push('_');
                         root_file_name.push_str(x.0.replace(" ", "_").replace("\0", "").as_str());
-                        root_file_name.push_str(".p7b\0");
+                        root_file_name.push_str("_der.p7b\0");
                         let p7b_root_file_name_ptr = PCSTR(root_file_name.as_ptr()).as_ptr();
                         CertSaveStore(
                             x.1,
@@ -217,11 +221,15 @@ fn main() -> Result<()> {
                         readme_string_original.replace("IRFILENAME", p7b_file_name.as_str());
                     readme_string = readme_string.replace("SIGNINGCHAIN", "dod_pke_chain.pem");
                     std::fs::write("README.txt", readme_string.as_bytes()).unwrap();
-        
+
                     std::env::set_current_dir("..").unwrap();
-                    do_the_signing(fresh_cert);
+                    println!(
+                        " ***** Signing {} using Windows CryptSignMessage function ***** ",
+                        file_name
+                    );
+                    do_the_signing(fresh_cert, file_name.clone());
                     zip_up_bundle(file_name);
-        
+
                     if !CertCloseStore(main_store, 0).as_bool() {
                         println!("Failed to close the {} memory_store", current_dir_string);
                     }
@@ -230,8 +238,6 @@ fn main() -> Result<()> {
                 }
             }
         }
-
-        
 
         // Clean-up
         if !CertFreeCertificateContext(Some(fresh_cert)).as_bool() {
@@ -364,7 +370,7 @@ pub unsafe fn get_context_cert_file(cert_bytes: &[u8]) -> Result<*mut CERT_CONTE
     }
 }
 
-pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT) {
+pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT, file_name: String) {
     // Grab certificate chain
     let cert_chain_parameter = CERT_CHAIN_PARA {
         cbSize: u32::try_from(std::mem::size_of::<CERT_CHAIN_PARA>()).unwrap(),
@@ -489,7 +495,11 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT) {
 
     // println!("Second call complete. Sign Success:{:?}", sign_success_2);
     let signed_data = std::slice::from_raw_parts(blob_ptr as *mut u8, data_size as _);
-    std::fs::write("current_build/certificates.sha256", signed_data).unwrap();
+    let mut sha_256_file_name = String::from(BUILD_DIRECTORY);
+    sha_256_file_name.push('/');
+    sha_256_file_name.push_str(file_name.as_str());
+    sha_256_file_name.push_str(".sha256");
+    std::fs::write(sha_256_file_name, signed_data).unwrap();
     // println!("{:02X?}", _signed_data);
 
     // clean-up
@@ -567,8 +577,10 @@ pub unsafe fn zip_up_bundle(file_name: String) {
     zip_file_name.push_str(".zip");
     let mut zipper = std::fs::File::create(zip_file_name).unwrap();
     let mut zip = zip::ZipWriter::new(zipper);
-    let zip_options =
-        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let date_time = DateTime::try_from(time::OffsetDateTime::now_local().unwrap()).unwrap();
+    let zip_options = zip::write::FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .last_modified_time(date_time);
 
     for entry in WalkDir::new(BUILD_DIRECTORY)
         .into_iter()
@@ -576,7 +588,8 @@ pub unsafe fn zip_up_bundle(file_name: String) {
     {
         if entry.path().is_file() {
             let current_file = entry.path().file_name().unwrap().to_str().unwrap();
-            zip.start_file(file_name.clone() + "/" + current_file, zip_options).unwrap();
+            zip.start_file(file_name.clone() + "/" + current_file, zip_options)
+                .unwrap();
             zip.write_all(&std::fs::read(entry.path().to_str().unwrap()).unwrap())
                 .unwrap();
         }
