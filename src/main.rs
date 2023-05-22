@@ -1,12 +1,9 @@
-#![allow(unused_imports)]
 use std::path::Path;
 use std::{
     collections::HashMap,
-    ffi::{c_void, OsStr},
-    fs::{DirEntry, File},
+    ffi::{c_void},
     io::Write,
     mem::transmute,
-    path::Component,
 };
 use walkdir::WalkDir;
 use windows::Win32::Security::Cryptography::{
@@ -17,14 +14,13 @@ use windows::{
     Win32::{
         Foundation::GetLastError,
         Security::Cryptography::{
-            CertAddCertificateContextToStore, CertAddStoreToCollection, CertCloseStore,
+            CertAddCertificateContextToStore, CertCloseStore,
             CertCreateCertificateContext, CertFreeCertificateChain, CertFreeCertificateContext,
             CertOpenStore, CertSaveStore, CryptBinaryToStringA, CryptSignMessage,
-            CryptStringToBinaryA, CryptStringToBinaryW, CERT_CHAIN_CONTEXT, CERT_CHAIN_PARA,
+            CryptStringToBinaryA, CERT_CHAIN_CONTEXT, CERT_CHAIN_PARA,
             CERT_CONTEXT, CERT_OPEN_STORE_FLAGS, CERT_QUERY_ENCODING_TYPE,
-            CERT_STORE_ADD_REPLACE_EXISTING, CERT_STORE_CERTIFICATE_CONTEXT,
-            CERT_STORE_PROV_COLLECTION, CERT_STORE_PROV_MEMORY, CERT_STORE_PROV_SYSTEM_W,
-            CERT_STORE_SAVE_AS_PKCS7, CERT_STORE_SAVE_TO_FILENAME_A, CERT_STORE_SAVE_TO_FILENAME_W,
+            CERT_STORE_ADD_REPLACE_EXISTING, CERT_STORE_PROV_MEMORY, CERT_STORE_PROV_SYSTEM_W,
+            CERT_STORE_SAVE_AS_PKCS7, CERT_STORE_SAVE_TO_FILENAME_A,
             CERT_SYSTEM_STORE_CURRENT_USER_ID, CERT_SYSTEM_STORE_LOCATION_SHIFT,
             CRYPT_ALGORITHM_IDENTIFIER, CRYPT_INTEGER_BLOB, CRYPT_SIGN_MESSAGE_PARA,
             CRYPT_STRING_BASE64HEADER, HCERTSTORE, HCRYPTPROV_LEGACY, PKCS_7_ASN_ENCODING,
@@ -69,13 +65,13 @@ fn main() -> Result<()> {
 
                 // Reading input from user, will return version number, no, or quit
                 println!("Run bundle for {}? ([Y]es/[N]o/[Q]uit)", current_dir_string);
-                let mut run_bundle = user_input_for_bundle();
+                let run_bundle = user_input_for_bundle();
 
                 // Create and loop through main bundle
                 if run_bundle.contains("_") {
 
                     // Create Main Bundle, stored in memory at first.
-                    let mut main_store = CertOpenStore(
+                    let main_store = CertOpenStore(
                         CERT_STORE_PROV_MEMORY,
                         CERT_QUERY_ENCODING_TYPE::default(),
                         HCRYPTPROV_LEGACY::default(),
@@ -104,7 +100,7 @@ fn main() -> Result<()> {
                             
                             let root_name = get_chain_root_subject(cert_context, main_store);
 
-                            let mut update_store: HCERTSTORE;
+                            let update_store: HCERTSTORE;
                             if root_bundles.contains_key(&root_name) {
                                 update_store = *(root_bundles.get(&root_name).unwrap());
                             } else {
@@ -252,7 +248,7 @@ unsafe fn get_chain_root_subject(cert_context: *mut CERT_CONTEXT, main_store: HC
     let chain_size = (**(*fresh_chain).rgpChain).cElement;
     let chain_array =
         std::slice::from_raw_parts(chain_pointer, chain_size as _);
-    let mut root_cert = chain_array.last().unwrap().pCertContext.cast_mut();
+    let root_cert = chain_array.last().unwrap().pCertContext.cast_mut();
     return get_cert_subject(root_cert).unwrap_or("unknown_root".to_owned());
 }
 
@@ -563,8 +559,8 @@ pub unsafe fn convert_from_der_to_pem(der: &[u8]) -> Result<String> {
             HSTRING::from("Failed converting from DER to PEM while getting size."),
         ));
     }
-    let mut buf = vec![0; read_len as usize];
-    let mut pstr_buf = PSTR(buf.as_ptr() as _);
+    let buf = vec![0; read_len as usize];
+    let pstr_buf = PSTR(buf.as_ptr() as _);
 
     let ok = CryptBinaryToStringA(der, CRYPT_STRING_BASE64HEADER, pstr_buf, &mut read_len);
 
@@ -581,7 +577,7 @@ pub unsafe fn convert_from_der_to_pem(der: &[u8]) -> Result<String> {
 pub unsafe fn zip_up_bundle(file_name: String) {
     let mut zip_file_name = file_name.clone();
     zip_file_name.push_str(".zip");
-    let mut zipper = std::fs::File::create(zip_file_name).unwrap();
+    let zipper = std::fs::File::create(zip_file_name).unwrap();
     let mut zip = zip::ZipWriter::new(zipper);
     let date_time = DateTime::try_from(time::OffsetDateTime::now_local().unwrap()).unwrap();
     let zip_options = zip::write::FileOptions::default()
