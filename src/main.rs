@@ -51,6 +51,7 @@ fn main() -> Result<()> {
         select_signing_cert(&mut fresh_cert)?;
 
         for entry in WalkDir::new("certificates")
+            .max_depth(1)
             .into_iter()
             .filter_map(|e| e.ok())
         {
