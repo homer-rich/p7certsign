@@ -471,7 +471,7 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT, file_name: String) {
     let mut data_size = 0;
 
     // First call sets up variables to receive the size of the signed data.
-    let _sign_success = CryptSignMessage(
+    let sign_success = CryptSignMessage(
         &crypt_sign_message_para,
         windows::Win32::Foundation::BOOL::from(false),
         1,
@@ -481,12 +481,14 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT, file_name: String) {
         &mut data_size,
     );
 
-    // println!("First call complete. Sign Success:{:?}", sign_success);
+    if !sign_success.as_bool() {
+        panic!("Error on first sign.  Operation may have been canceled or card may not be inserted.")
+    }
 
     let proc_heap = GetProcessHeap().unwrap();
     let blob_ptr = HeapAlloc(proc_heap, HEAP_ZERO_MEMORY, data_size as _);
 
-    let _sign_success_2 = CryptSignMessage(
+    let sign_success2 = CryptSignMessage(
         &crypt_sign_message_para,
         windows::Win32::Foundation::BOOL::from(false),
         1,
@@ -495,6 +497,10 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT, file_name: String) {
         Some(blob_ptr as *mut u8),
         &mut data_size,
     );
+
+    if !sign_success2.as_bool() {
+        panic!("Error on second sign.  Operation may have been canceled or card may not be inserted.")
+    }
 
     // println!("Second call complete. Sign Success:{:?}", sign_success_2);
     let signed_data = std::slice::from_raw_parts(blob_ptr as *mut u8, data_size as _);
