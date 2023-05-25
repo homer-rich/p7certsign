@@ -2,7 +2,8 @@
 
 ## Purpose
 
-Remove reliance on NSS and OpenSSL for bundling certificates into a PKCS7 for use in disseminate DoD, JITC, WCF, type certificates in easy zip files.
+Remove reliance on NSS, OpenSSL, and Python to bundle certificates into a PKCS7. The program now uses native Windows system calls
+to zip certificate folders into the bundle format to share within the DoD PKE enclave.
 
 ## Steps To Create A Bundle
 
@@ -31,13 +32,13 @@ Remove reliance on NSS and OpenSSL for bundling certificates into a PKCS7 for us
 <br>        │   ├── DoD_Gray_PKI_Subordinate_CA_1.cer
 <br>        │   ├── DoD_Gray_PKI_Subordinate_CA_2.cer
 <br>        │   └── USG_Gray_PKI_Root_CA_1.cer
-5) Double click the p7certsign.exe file to run the program.  It will loop through the certificates 
+5) Double click the p7certsign.exe file to run the program.  It will loop through the certificates
 folders nested directories to find any bundles that need to be run.
 
-6) The program will first have you select a signing certificate that signs the hash file, then 
+6) The program will first have you select a signing certificate that signs the hash file, then
 it will prompt you for the version number of each bundle to be run.
 
-7) For each bundle you run through, you will enter your PIN once to sign the sha256 file and a 
+7) For each bundle you run through, you will enter your PIN once to sign the sha256 file and a
 zip will be created that matches the folder name and version number you input.
 
 8) The output will be put in the same location of the .exe file as a .zip file for each bundle.
@@ -56,7 +57,7 @@ Each bundle contains files that help verify the contents of the zip file you are
 
 * certificates_pkcs7_v[version_number]\_[group_name]\_[root_ca_name]_der.p7b
 
-    This file(s) contain every certificate that was issued by the Root CA at the tail end of the file name. 
+    This file(s) contain every certificate that was issued by the Root CA at the tail end of the file name.
     If a user only wants certs from a certain root, they can use these files to isolate that CA.
 
 * dod_pke_chain.pem
@@ -69,7 +70,7 @@ Each bundle contains files that help verify the contents of the zip file you are
 
 ## Example Output
 
-Double clicking on the p7certsign.exe file with the example certificates in step four from above yields this output. 
+Double clicking on the p7certsign.exe file with the example certificates in step four from above yields this output.
 In this example I chose to run the DoD bundle with version 5_9, skip the ECA bundle, and enter some improper input for the
 version number of the Gray bundle.  It will reprompt you for the proper format and continue.
 

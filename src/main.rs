@@ -341,6 +341,9 @@ pub unsafe fn select_signing_cert(fresh_cert: *mut *mut CERT_CONTEXT) -> Result<
     ));
     cert_select_certificate_w(&cert_select_struct);
     if fresh_cert.read().is_null() {
+        if std::fs::metadata(BUILD_DIRECTORY).is_ok() {
+            std::fs::remove_dir_all(BUILD_DIRECTORY).unwrap();
+        }
         panic!("No certificate selected for signature.  Exiting.")
     }
 
@@ -396,8 +399,11 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT, file_name: String) {
     let chain_array = std::slice::from_raw_parts(chain_pointer, chain_size as _);
     // get second cert in data array spot 0 is the default cert, slot 1 is next up in the chain
     let chain_size = chain_array.len();
-    let intermediate_cert = chain_array[1].pCertContext.cast_mut();
+    let intermediate_cert: *mut CERT_CONTEXT;//chain_array[1].pCertContext.cast_mut();
+    let mut certs_in_signature: Vec<*mut CERT_CONTEXT>;
     if chain_size > 2 {
+        intermediate_cert = chain_array[1].pCertContext.cast_mut();
+        certs_in_signature = vec![intermediate_cert, fresh_cert];
         let root_cert = *(chain_array.last().unwrap().pCertContext);
         let root_cert_raw_parts =
             std::slice::from_raw_parts(root_cert.pbCertEncoded, root_cert.cbCertEncoded as _);
@@ -407,7 +413,9 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT, file_name: String) {
             root_cert_pem_string.as_bytes(),
         )
         .unwrap();
-    } else {
+    } else if chain_size > 1 {
+        intermediate_cert = chain_array[1].pCertContext.cast_mut();
+        certs_in_signature = vec![intermediate_cert, fresh_cert];
         let intermed_cert_raw_parts = std::slice::from_raw_parts(
             (*intermediate_cert).pbCertEncoded,
             (*intermediate_cert).cbCertEncoded as _,
@@ -418,10 +426,12 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT, file_name: String) {
             intermed_cert_pem_string.as_bytes(),
         )
         .unwrap();
+    } else {
+        certs_in_signature = vec![fresh_cert];
     }
 
     // get chain size
-    let mut certs_in_signature: Vec<*mut CERT_CONTEXT> = vec![intermediate_cert, fresh_cert];
+    //let mut certs_in_signature: Vec<*mut CERT_CONTEXT> = vec![intermediate_cert, fresh_cert];
 
     // Sign a file with the selected cert
     // https://learn.microsoft.com/en-us/windows/win32/seccrypto/example-c-program-signing-a-message-and-verifying-a-message-signature
@@ -482,7 +492,10 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT, file_name: String) {
     );
 
     if !sign_success.as_bool() {
-        panic!("Error on first sign.  Operation may have been canceled or card may not be inserted.")
+        if std::fs::metadata(BUILD_DIRECTORY).is_ok() {
+            std::fs::remove_dir_all(BUILD_DIRECTORY).unwrap();
+        }
+        panic!("Error on first sign.  Operation may have been cancelled or card may not be inserted.")
     }
 
     let proc_heap = GetProcessHeap().unwrap();
@@ -499,7 +512,10 @@ pub unsafe fn do_the_signing(fresh_cert: *mut CERT_CONTEXT, file_name: String) {
     );
 
     if !sign_success2.as_bool() {
-        panic!("Error on second sign.  Operation may have been canceled or card may not be inserted.")
+        if std::fs::metadata(BUILD_DIRECTORY).is_ok() {
+            std::fs::remove_dir_all(BUILD_DIRECTORY).unwrap();
+        }
+        panic!("Error on second sign.  Operation may have been cancelled or card may not be inserted.")
     }
 
     // println!("Second call complete. Sign Success:{:?}", sign_success_2);
