@@ -66,10 +66,10 @@ fn main() -> Result<()> {
 
                 // Reading input from user, will return version number, no, or quit
                 println!("Run bundle for {}? ([Y]es/[N]o/[Q]uit)", current_dir_string);
-                let run_bundle = user_input_for_bundle();
+                let bundle_version_number = user_input_for_bundle();
 
                 // Create and loop through main bundle
-                if run_bundle.contains("_") {
+                if bundle_version_number.contains("_") {
 
                     // Create Main Bundle, stored in memory at first.
                     let main_store = CertOpenStore(
@@ -126,7 +126,7 @@ fn main() -> Result<()> {
                     }
 
                     let mut file_name = "certificates_pkcs7_v".to_owned();
-                    file_name.push_str(run_bundle.trim());
+                    file_name.push_str(bundle_version_number.trim());
                     file_name.push('_');
                     file_name.push_str(current_dir_string.to_lowercase().as_str());
 
@@ -137,17 +137,36 @@ fn main() -> Result<()> {
                     std::env::set_current_dir(BUILD_DIRECTORY).unwrap();
                     // create base bundle for current bundle
 
-                    save_and_close_store(p7b_file_name, main_store);
+                    save_and_close_store(p7b_file_name.clone(), main_store);
+
+                    // let main_p7b_file = std::fs::read(p7b_file_name.clone().replace("\0", "")).unwrap();
 
                     // Create each individual bundle file
                     for x in root_bundles.clone().into_iter() {
-                        let mut root_file_name = file_name.clone();
-                        root_file_name.push('_');
+                        let mut individual_file_name = file_name.clone();
+                        individual_file_name.push('_');
                         // Turn spaces into _ and remove any null terminators from windows conversion
-                        root_file_name.push_str(x.0.replace(" ", "_").replace("\0", "").as_str());
-                        root_file_name.push_str("_der.p7b\0");
+                        individual_file_name.push_str(x.0.replace(" ", "_").replace("\0", "").as_str());
 
-                        save_and_close_store(root_file_name, x.1);
+                        /* Uncomment this and below block comment to have the program check if it needs to remove excess individual bundles
+                        let mut individual_file_name_delete_check = individual_file_name.clone();
+                        individual_file_name_delete_check.push_str("_der.p7b"); */
+                        individual_file_name.push_str("_der.p7b\0");
+
+                        save_and_close_store(individual_file_name, x.1);
+
+                        /* 
+                        
+                        let individual_p7b_file = std::fs::read(individual_file_name_delete_check.clone()).unwrap();
+                        
+                        if main_p7b_file == individual_p7b_file {
+                            println!("The individual bundle matches the root bundle.  Removing it to reduce space.");
+                            let successful_delete = std::fs::remove_file(individual_file_name_delete_check.clone());
+                            if successful_delete.is_ok() {
+                                println!("Successfully deleted: {}", individual_file_name_delete_check);
+                            }
+                            successful_delete.unwrap();
+                        } */
                     }
                     root_bundles.clear();
 
@@ -155,6 +174,7 @@ fn main() -> Result<()> {
                     let mut readme_string =
                         readme_string_original.replace("IRFILENAME", file_name.as_str());
                     readme_string = readme_string.replace("SIGNINGCHAIN", "dod_pke_chain.pem");
+                    readme_string = readme_string.replace("GROUPREPLACE", current_dir_string.to_lowercase().as_str());
                     std::fs::write("README.txt", readme_string.as_bytes()).unwrap();
 
                     std::env::set_current_dir("..").unwrap();
@@ -165,7 +185,7 @@ fn main() -> Result<()> {
                     do_the_signing(fresh_cert, file_name.clone());
                     zip_up_bundle(file_name);
 
-                } else if run_bundle.contains("q") {
+                } else if bundle_version_number.contains("q") {
                     break;
                 }
             }
@@ -322,9 +342,11 @@ pub unsafe fn select_signing_cert(fresh_cert: *mut *mut CERT_CONTEXT) -> Result<
         cCertStore: 1,
         arrayCertStore: &mut personal_store,
         // code signing
-        // szPurposeOid: s!("1.3.6.1.5.5.7.3.3"),
+        //szPurposeOid: s!("1.3.6.1.5.5.7.3.3"),
         // on our encryption certs
-        szPurposeOid: s!("1.3.6.1.4.1.311.10.3.12"),
+        //szPurposeOid: s!("1.3.6.1.4.1.311.10.3.12"),
+        // none
+        szPurposeOid: ::core::mem::zeroed(),
         cCertContext: 0,
         arrayCertContext: fresh_cert,
         lCustData: windows::Win32::Foundation::LPARAM(0),
